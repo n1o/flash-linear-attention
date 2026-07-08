@@ -17,6 +17,7 @@ from fla.models.forgetting_transformer import (
 )
 from fla.models.gated_deltanet import GatedDeltaNetConfig, GatedDeltaNetForCausalLM, GatedDeltaNetModel
 from fla.models.gated_deltaproduct import GatedDeltaProductConfig, GatedDeltaProductForCausalLM, GatedDeltaProductModel
+from fla.models.gdn2_parallax import GDN2ParallaxConfig, GDN2ParallaxForCausalLM, GDN2ParallaxModel
 from fla.models.gla import GLAConfig, GLAForCausalLM, GLAModel
 from fla.models.gsa import GSAConfig, GSAForCausalLM, GSAModel
 from fla.models.hgrn import HGRNConfig, HGRNForCausalLM, HGRNModel
@@ -64,6 +65,9 @@ __all__ = [
     'ForgettingTransformerConfig',
     'ForgettingTransformerForCausalLM',
     'ForgettingTransformerModel',
+    'GDN2ParallaxConfig',
+    'GDN2ParallaxForCausalLM',
+    'GDN2ParallaxModel',
     'GLAConfig',
     'GLAForCausalLM',
     'GLAModel',
