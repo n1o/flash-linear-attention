@@ -214,6 +214,21 @@ Run B (fwdbwd only, re-run after anomaly):
   D64: gdn2 5.849 | qgdn2 5.974 | qgdn2_save 5.330
   D32: gdn2 5.790 | qgdn2 5.817 | qgdn2_save 5.178
 qgdn2_save ~11% faster than qgdn2 on BOTH shapes; identical peak memory (99/370 MB).
+
+## Follow-up integration
+
+Added a `disable_recompute` constructor flag to `QGatedDeltaNet2` and threaded it to
+`chunk_qgdn2(..., disable_recompute=...)` only during training. This preserves the
+default behavior while exposing the measured `chunk_qgdn2_save` path to model-level
+training code. The C4 benchmark now has a `qgdn2_save` model choice for direct loss
+and throughput comparison against `qgdn2`.
+
+Augur09 A100 validation:
+  - `python -m pytest tests/models/test_modeling_qgdn2.py -q` passed both
+    `disable_recompute=False` and `disable_recompute=True` cases in the CUDA 13 container.
+  - `python -m benchmarks.ops.verify --op chunk_qgdn2_save --modes fwdbwd` passed the
+    frozen `tests/ops/test_qgdn2.py` gate (3/3), then timing was discarded because a Ray
+    worker started using GPU 3 during the benchmark phase.
 Gate: 3/3 green (1.60s). Kernel back to iter0 (all changes reverted). Verdict confirmed.
 
 DoD status:
@@ -224,8 +239,6 @@ DoD status:
   - no default-shape regression (no kernel changed): YES
   - NCU summary: UNAVAILABLE (ERR_NVGPUCTRPERM); win is a kwarg change, not a kernel -> NCU
     not the right evidence; benchmark numbers are the evidence of record.
-
-
 
 
 

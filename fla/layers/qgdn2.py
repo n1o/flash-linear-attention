@@ -78,6 +78,8 @@ class QGatedDeltaNet2(nn.Module):
             The index of the layer. Default: None.
         norm_eps (float, Optional):
             The epsilon value for the normalization layer. Default: 1e-5.
+        disable_recompute (bool, Optional):
+            Whether to retain chunk intermediates during training backward instead of recomputing them. Default: `False`.
     """
 
     def __init__(
@@ -95,6 +97,7 @@ class QGatedDeltaNet2(nn.Module):
         layer_idx: int | None = None,
         norm_eps: float = 1e-5,
         lamb_bias: float = 0.8,
+        disable_recompute: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -108,6 +111,7 @@ class QGatedDeltaNet2(nn.Module):
         self.conv_size = conv_size
         self.conv_bias = conv_bias
         self.lamb_bias = lamb_bias
+        self.disable_recompute = disable_recompute
 
         self.head_dim = head_dim
         self.num_heads = num_heads
@@ -292,6 +296,7 @@ class QGatedDeltaNet2(nn.Module):
                 output_final_state=use_cache,
                 use_qk_l2norm_in_kernel=True,
                 cu_seqlens=cu_seqlens,
+                disable_recompute=self.disable_recompute and self.training,
                 lq=lq,
             )
         elif mode == "fused_recurrent":

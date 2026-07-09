@@ -12,8 +12,9 @@ from fla.layers import QGatedDeltaNet2
 from fla.utils import device
 
 
+@pytest.mark.parametrize("disable_recompute", [False, True])
 @pytest.mark.skipif(getattr(device, "type", str(device)) != "cuda", reason="QGDN2 chunk kernel requires CUDA")
-def test_layer_forward_backward():
+def test_layer_forward_backward(disable_recompute: bool):
     torch.manual_seed(42)
     layer = QGatedDeltaNet2(
         hidden_size=64,
@@ -22,6 +23,7 @@ def test_layer_forward_backward():
         head_dim=32,
         use_short_conv=False,
         mode="chunk",
+        disable_recompute=disable_recompute,
     ).to(device).to(torch.float32)
     x = torch.randn(2, 12, 64, device=device, dtype=torch.float32, requires_grad=True)
 

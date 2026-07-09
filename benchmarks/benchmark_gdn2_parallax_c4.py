@@ -437,20 +437,25 @@ def build_models(args: argparse.Namespace, device: torch.device) -> dict[str, to
     torch.manual_seed(args.seed)
     qgdn2 = TinyFLALM(QGatedDeltaNet2, **kwargs)
     torch.manual_seed(args.seed)
+    qgdn2_save = TinyFLALM(QGatedDeltaNet2, disable_recompute=True, **kwargs)
+    torch.manual_seed(args.seed)
     parallax = TinyFLALM(GDN2Parallax, **kwargs)
     torch.manual_seed(args.seed)
     last_parallax_classes = [GatedDeltaNet2] * max(args.num_layers - 1, 0) + [GDN2Parallax]
     parallax_last = TinyFLALM(last_parallax_classes, **kwargs)
     shared_q = copy_shared_state(gdn2, qgdn2)
+    shared_q_save = copy_shared_state(gdn2, qgdn2_save)
     shared = copy_shared_state(gdn2, parallax)
     shared_last = copy_shared_state(gdn2, parallax_last)
     print(f"copied {shared_q} shared tensors from gdn2 init into qgdn2")
+    print(f"copied {shared_q_save} shared tensors from gdn2 init into qgdn2_save")
     print(f"copied {shared} shared tensors from gdn2 init into gdn2_parallax")
     print(f"copied {shared_last} shared tensors from gdn2 init into gdn2_parallax_last")
     dtype = getattr(torch, args.dtype)
     all_models = {
         "gdn2": gdn2.to(device=device, dtype=dtype),
         "qgdn2": qgdn2.to(device=device, dtype=dtype),
+        "qgdn2_save": qgdn2_save.to(device=device, dtype=dtype),
         "gdn2_parallax": parallax.to(device=device, dtype=dtype),
         "gdn2_parallax_last": parallax_last.to(device=device, dtype=dtype),
     }
@@ -472,7 +477,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--models",
         nargs="+",
-        choices=("gdn2", "qgdn2", "gdn2_parallax", "gdn2_parallax_last"),
+        choices=("gdn2", "qgdn2", "qgdn2_save", "gdn2_parallax", "gdn2_parallax_last"),
         default=["gdn2", "gdn2_parallax"],
     )
     parser.add_argument("--batch-size", type=int, default=8)
