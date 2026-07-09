@@ -16,7 +16,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from fla.layers import GatedDeltaNet2, GDN2Parallax
+from fla.layers import GatedDeltaNet2, GDN2Parallax, QGatedDeltaNet2
 
 
 @dataclass
@@ -295,12 +295,17 @@ def build_models(args: argparse.Namespace, device: torch.device) -> dict[str, nn
     torch.manual_seed(args.seed)
     gdn2 = TinyFLALM(GatedDeltaNet2, **kwargs)
     torch.manual_seed(args.seed)
+    qgdn2 = TinyFLALM(QGatedDeltaNet2, **kwargs)
+    torch.manual_seed(args.seed)
     parallax = TinyFLALM(GDN2Parallax, **kwargs)
+    shared_q = copy_shared_state(gdn2, qgdn2)
     shared = copy_shared_state(gdn2, parallax)
+    print(f"copied {shared_q} shared tensors from gdn2 init into qgdn2")
     print(f"copied {shared} shared tensors from gdn2 init into gdn2_parallax")
     dtype = getattr(torch, args.dtype)
     return {
         "gdn2": gdn2.to(device=device, dtype=dtype),
+        "qgdn2": qgdn2.to(device=device, dtype=dtype),
         "gdn2_parallax": parallax.to(device=device, dtype=dtype),
     }
 

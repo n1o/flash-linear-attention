@@ -1,0 +1,40 @@
+Machine: NVIDIA B300 SXM6 AC | CUDA 13.0 | PyTorch 2.14.0.dev20260707+cu130
+Shapes: 6 configs
+Ops: ['chunk_gdn2', 'chunk_qgdn2', 'chunk_qgdn2_save']
+/opt/python/lib/python3.12/site-packages/huggingface_hub/constants.py:298: FutureWarning: The `HF_HUB_ENABLE_HF_TRANSFER` environment variable is deprecated as 'hf_transfer' is not used anymore. Please use `HF_XET_HIGH_PERFORMANCE` instead to enable high performance transfer with Xet. Visit https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables#hfxethighperformance for more details.
+  warnings.warn(
+
+  [chunk_gdn2] Warming up 2 shape(s)...
+/opt/python/lib/python3.12/site-packages/triton/language/core.py:2623: UserWarning: tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.
+  warn("tl.make_block_ptr is deprecated. Use TensorDescriptor or tl.make_tensor_descriptor instead.")
+  [chunk_gdn2] Warmup done.
+
+  [chunk_qgdn2] Warming up 2 shape(s)...
+  [chunk_qgdn2] Warmup done.
+
+  [chunk_qgdn2_save] Warming up 2 shape(s)...
+  [chunk_qgdn2_save] Warmup done.
+
+==========================================================================
+  Machine: NVIDIA B300 SXM6 AC | CUDA 13.0 | PyTorch 2.14.0.dev20260707+cu130
+==========================================================================
+  fwd        B      T    H    D  op                            unknown(ms)
+          ----------------------------------------------------------------
+             4   4096    4   64  chunk_gdn2                          0.517
+                                 chunk_qgdn2                         0.520
+                                 chunk_qgdn2_save                    0.520
+          ----------------------------------------------------------------
+             8   2048    2   32  chunk_gdn2                          0.522
+                                 chunk_qgdn2                         0.501
+                                 chunk_qgdn2_save                    0.494
+==========================================================================
+  fwdbwd     B      T    H    D  op                            unknown(ms)
+          ----------------------------------------------------------------
+             4   4096    4   64  chunk_gdn2                          6.056
+                                 chunk_qgdn2                         6.078
+                                 chunk_qgdn2_save                    5.414
+          ----------------------------------------------------------------
+             8   2048    2   32  chunk_gdn2                          6.008
+                                 chunk_qgdn2                         5.984
+                                 chunk_qgdn2_save                    5.300
+==========================================================================

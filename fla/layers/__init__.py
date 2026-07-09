@@ -36,6 +36,7 @@ from .multiscale_retention import MultiScaleRetention
 from .nsa import NativeSparseAttention
 from .parallax import Parallax
 from .path_attn import PaTHAttention
+from .qgdn2 import QGatedDeltaNet2
 from .raven import Raven
 from .rebased import ReBasedLinearAttention
 from .rodimus import RodimusAttention, SlidingWindowSharedKeyAttention
@@ -75,6 +76,7 @@ __all__ = [
     'MultiheadLatentAttention',
     'NativeSparseAttention',
     'PaTHAttention',
+    'QGatedDeltaNet2',
     'Parallax',
     'RWKV6Attention',
     'RWKV7Attention',

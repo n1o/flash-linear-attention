@@ -341,6 +341,80 @@ register_op(OpConfig(
     category='gate_beta',
 ))
 
+# --- GDN2 / QGDN2 (channel-wise erase/write gates) ---
+
+
+def _scale_gdn2_qkv(inputs, B, T, H, D, **kw):
+    """Keep QGDN2's query-conditioned erase path in the same stable range as tests."""
+    del B, T, H, kw
+    with torch.no_grad():
+        scale = D ** -0.5
+        for name in ('q', 'k', 'v'):
+            inputs[name].mul_(scale)
+
+
+_gdn2_inputs = {
+    **_simple_qkv,
+    'g': TensorSpec(shape_BTHD, transform=logsigmoid),
+    'b': TensorSpec(shape_BTHD, transform=sigmoid_transform),
+    'w': TensorSpec(shape_BTHD, transform=sigmoid_transform),
+}
+
+_qgdn2_inputs = {
+    **_gdn2_inputs,
+    'lq': TensorSpec(shape_BTH, transform=sigmoid_transform),
+}
+
+_gdn2_shapes = {
+    'B8_T2048_H2_D32': {'B': 8, 'T': 2048, 'H': 2, 'D': 32},
+    'B4_T4096_H4_D64': {'B': 4, 'T': 4096, 'H': 4, 'D': 64},
+}
+
+register_op(OpConfig(
+    name='chunk_gdn2',
+    import_path='fla.ops.gdn2',
+    inputs=_gdn2_inputs,
+    extra_kwargs={'use_qk_l2norm_in_kernel': True},
+    post_init=_scale_gdn2_qkv,
+    default_shapes=_gdn2_shapes,
+    category='gdn2',
+))
+
+register_op(OpConfig(
+    name='chunk_gdn2_save',
+    import_path='fla.ops.gdn2',
+    func_name='chunk_gdn2',
+    inputs=_gdn2_inputs,
+    extra_kwargs={'use_qk_l2norm_in_kernel': True, 'disable_recompute': True},
+    post_init=_scale_gdn2_qkv,
+    default_shapes=_gdn2_shapes,
+    category='gdn2',
+    test_file='tests/ops/test_gdn2.py',
+))
+
+register_op(OpConfig(
+    name='chunk_qgdn2',
+    import_path='fla.ops.qgdn2',
+    inputs=_qgdn2_inputs,
+    extra_kwargs={'use_qk_l2norm_in_kernel': True},
+    post_init=_scale_gdn2_qkv,
+    default_shapes=_gdn2_shapes,
+    category='qgdn2',
+    test_file='tests/ops/test_qgdn2.py',
+))
+
+register_op(OpConfig(
+    name='chunk_qgdn2_save',
+    import_path='fla.ops.qgdn2',
+    func_name='chunk_qgdn2',
+    inputs=_qgdn2_inputs,
+    extra_kwargs={'use_qk_l2norm_in_kernel': True, 'disable_recompute': True},
+    post_init=_scale_gdn2_qkv,
+    default_shapes=_gdn2_shapes,
+    category='qgdn2',
+    test_file='tests/ops/test_qgdn2.py',
+))
+
 # --- +head gate (g=[B,T,H] with logsigmoid) ---
 
 register_op(OpConfig(
