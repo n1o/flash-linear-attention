@@ -14,9 +14,9 @@ correction is another GDN-2 recurrence over centered keys/values:
     C_t = GDN2State(k_t - m^k_{t-1}, v_t - m^v_{t-1})
     corr_t = C_t^T rho_t
 
-This file is intentionally a correct composite first step.  A future fused
-kernel can merge the two state recurrences and move the EMA centering into
-Triton once the math and gradient tests are locked.
+The training path stacks the base and correction branches along the head axis
+and runs the GDN-2 chunk pipeline once over ``2H`` heads.  EMA centering remains
+in PyTorch so the detached running-mean semantics stay easy to audit.
 """
 
 from __future__ import annotations
@@ -25,8 +25,11 @@ import math
 
 import torch
 
-from fla.ops.gdn2 import chunk_gdn2
-from fla.utils import input_guard
+from fla.ops.gdn2.chunk_bwd import chunk_gdn2_bwd
+from fla.ops.gdn2.chunk_fwd import chunk_gdn2_fwd
+from fla.ops.utils import chunk_local_cumsum, prepare_chunk_indices
+from fla.ops.utils.constant import RCP_LN2
+from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
 
 
 def _l2norm(x: torch.Tensor) -> torch.Tensor:
@@ -155,6 +158,198 @@ def _center_inputs(
     return kc, vc, mkt, mvt
 
 
+class ChunkGDN2ParallaxFunction(torch.autograd.Function):
+    """Autograd wrapper for the paired-head Parallax chunk path."""
+
+    @staticmethod
+    @input_guard
+    @autocast_custom_fwd
+    def forward(
+        ctx,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        g: torch.Tensor,
+        b: torch.Tensor,
+        w: torch.Tensor,
+        rho: torch.Tensor,
+        kc: torch.Tensor,
+        vc: torch.Tensor,
+        b_corr: torch.Tensor,
+        w_corr: torch.Tensor,
+        gamma: torch.Tensor,
+        h0: torch.Tensor | None,
+        c0: torch.Tensor | None,
+        scale: float,
+        output_final_state: bool,
+        cu_seqlens: torch.LongTensor | None,
+        cu_seqlens_cpu: torch.LongTensor | None,
+        chunk_size: int,
+        disable_recompute: bool,
+    ):
+        chunk_indices = (
+            prepare_chunk_indices(cu_seqlens, chunk_size)
+            if cu_seqlens is not None else None
+        )
+        g_cumsum = chunk_local_cumsum(
+            g=g,
+            scale=RCP_LN2,
+            chunk_size=chunk_size,
+            cu_seqlens=cu_seqlens,
+            chunk_indices=chunk_indices,
+        )
+        if (h0 is None) != (c0 is None):
+            raise ValueError("h0 and c0 must either both be set or both be None.")
+
+        q_pair = torch.cat((q * scale, rho), dim=2)
+        k_pair = torch.cat((k, kc), dim=2)
+        v_pair = torch.cat((v, vc), dim=2)
+        g_pair = torch.cat((g_cumsum, g_cumsum), dim=2)
+        b_pair = torch.cat((b, b_corr), dim=2)
+        w_pair = torch.cat((w, w_corr), dim=2)
+        state0_pair = torch.cat((h0, c0), dim=1) if h0 is not None else None
+
+        (pair, state_pair, g_pair, Aqk_pair, Akk_pair,
+         w_wy_pair, u_wy_pair, qg_pair, kg_pair, v_new_pair, h_pair, state0_pair) = chunk_gdn2_fwd(
+            q=q_pair,
+            k=k_pair,
+            v=v_pair,
+            g=g_pair,
+            b=b_pair,
+            w_gate=w_pair,
+            scale=1.0,
+            initial_state=state0_pair,
+            output_final_state=output_final_state,
+            cu_seqlens=cu_seqlens,
+            cu_seqlens_cpu=cu_seqlens_cpu,
+            chunk_indices=chunk_indices,
+            chunk_size=chunk_size,
+            disable_recompute=disable_recompute,
+            g_is_cumsum=True,
+        )
+        base, corr = pair.chunk(2, dim=2)
+        if state_pair is None:
+            ht, ct = None, None
+        else:
+            ht, ct = state_pair.chunk(2, dim=1)
+
+        ctx.save_for_backward(
+            q_pair, k_pair, v_pair, g, b_pair, w_pair,
+            gamma, corr,
+            g_pair, Aqk_pair, Akk_pair, state0_pair,
+            cu_seqlens, chunk_indices,
+        )
+        ctx.intermediates = (w_wy_pair, u_wy_pair, qg_pair, kg_pair, v_new_pair, h_pair)
+        ctx.num_heads = q.shape[2]
+        ctx.scale = scale
+        ctx.chunk_size = chunk_size
+        ctx.disable_recompute = disable_recompute
+
+        o = (base.float() - gamma.float().view(1, 1, -1, 1) * corr.float()).to(v.dtype)
+        return o, ht, ct
+
+    @staticmethod
+    @input_guard
+    @autocast_custom_bwd
+    def backward(ctx, do: torch.Tensor | None, dht: torch.Tensor | None, dct: torch.Tensor | None):
+        (q_pair, k_pair, v_pair, g, b_pair, w_pair,
+         gamma, corr,
+         g_pair, Aqk_pair, Akk_pair, state0_pair,
+         cu_seqlens, chunk_indices) = ctx.saved_tensors
+        w_wy_pair, u_wy_pair, qg_pair, kg_pair, v_new_pair, h_pair = ctx.intermediates
+        use_saved_pair = ctx.disable_recompute and all(
+            x is not None for x in (w_wy_pair, u_wy_pair, qg_pair, kg_pair, v_new_pair, h_pair)
+        )
+        H = ctx.num_heads
+
+        if do is None:
+            do = torch.zeros_like(v_pair[:, :, :H])
+
+        do_float = do.float()
+        do_pair = torch.cat(
+            (
+                do_float.to(q_pair.dtype),
+                (-gamma.float().view(1, 1, -1, 1) * do_float).to(q_pair.dtype),
+            ),
+            dim=2,
+        )
+        if dht is None and dct is None:
+            dstate_pair = None
+        else:
+            if dht is None:
+                dht = torch.zeros_like(dct)
+            if dct is None:
+                dct = torch.zeros_like(dht)
+            dstate_pair = torch.cat((dht, dct), dim=1)
+        dgamma = -(do_float * corr.float()).sum(dim=(0, 1, 3))
+
+        dq_pair, dk_pair, dv_pair, db_pair, dw_pair, dg_pair, dstate0_pair, _, _ = chunk_gdn2_bwd(
+            q=q_pair,
+            k=k_pair,
+            v=v_pair,
+            b=b_pair,
+            w_gate=w_pair,
+            Aqk=Aqk_pair,
+            Akk=Akk_pair,
+            scale=1.0,
+            initial_state=state0_pair,
+            do=do_pair,
+            dht=dstate_pair,
+            g=g_pair,
+            cu_seqlens=cu_seqlens,
+            chunk_indices=chunk_indices,
+            chunk_size=ctx.chunk_size,
+            w_wy=w_wy_pair,
+            u_wy=u_wy_pair,
+            qg=qg_pair,
+            kg=kg_pair,
+            v_new=v_new_pair,
+            h=h_pair,
+            disable_recompute=use_saved_pair,
+            return_dg_cumsum=True,
+        )
+        dq_scaled, drho = dq_pair.split(H, dim=2)
+        dk, dkc = dk_pair.split(H, dim=2)
+        dv, dvc = dv_pair.split(H, dim=2)
+        db, db_corr = db_pair.split(H, dim=2)
+        dw, dw_corr = dw_pair.split(H, dim=2)
+        dg, dg_corr = dg_pair.split(H, dim=2)
+        dg = chunk_local_cumsum(
+            dg + dg_corr,
+            chunk_size=ctx.chunk_size,
+            reverse=True,
+            cu_seqlens=cu_seqlens,
+            chunk_indices=chunk_indices,
+        )
+        if dstate0_pair is None:
+            dh0, dc0 = None, None
+        else:
+            dh0, dc0 = dstate0_pair.split(H, dim=1)
+
+        return (
+            (dq_scaled * ctx.scale).to(q_pair.dtype),  # q
+            dk.to(k_pair.dtype),            # k
+            dv.to(v_pair.dtype),            # v
+            dg.to(g.dtype),                 # g
+            db.to(b_pair.dtype),            # b
+            dw.to(w_pair.dtype),            # w
+            drho.to(q_pair.dtype),          # rho
+            dkc.to(k_pair.dtype),           # kc
+            dvc.to(v_pair.dtype),           # vc
+            db_corr.to(b_pair.dtype),       # b_corr
+            dw_corr.to(w_pair.dtype),       # w_corr
+            dgamma.to(gamma.dtype),         # gamma
+            dh0,                            # h0
+            dc0,                            # c0
+            None,                           # scale
+            None,                           # output_final_state
+            None,                           # cu_seqlens
+            None,                           # cu_seqlens_cpu
+            None,                           # chunk_size
+            None,                           # disable_recompute
+        )
+
+
 @torch.compiler.disable
 @input_guard
 def chunk_gdn2_parallax(
@@ -236,40 +431,29 @@ def chunk_gdn2_parallax(
         output_dtype=corr_dtype,
     )
 
-    base, ht = chunk_gdn2(
-        q=q_base,
-        k=k_base,
-        v=v,
-        g=g,
-        b=b,
-        w=w,
-        scale=scale,
-        initial_state=h0,
-        output_final_state=output_final_state,
-        use_qk_l2norm_in_kernel=False,
-        cu_seqlens=cu_seqlens,
-        cu_seqlens_cpu=cu_seqlens_cpu,
-        chunk_size=chunk_size,
-        disable_recompute=disable_recompute,
-    )
-    corr, ct = chunk_gdn2(
-        q=rho.to(corr_dtype),
-        k=kc,
-        v=vc,
-        g=g.to(corr_dtype),
-        b=b.to(corr_dtype),
-        w=w.to(corr_dtype),
-        scale=1.0,
-        initial_state=c0,
-        output_final_state=output_final_state,
-        use_qk_l2norm_in_kernel=False,
-        cu_seqlens=cu_seqlens,
-        cu_seqlens_cpu=cu_seqlens_cpu,
-        chunk_size=chunk_size,
-        disable_recompute=disable_recompute,
+    o, ht, ct = ChunkGDN2ParallaxFunction.apply(
+        q_base,
+        k_base,
+        v,
+        g,
+        b,
+        w,
+        rho.to(corr_dtype),
+        kc,
+        vc,
+        b.to(corr_dtype),
+        w.to(corr_dtype),
+        gamma,
+        h0,
+        c0,
+        scale,
+        output_final_state,
+        cu_seqlens,
+        cu_seqlens_cpu,
+        chunk_size,
+        disable_recompute,
     )
 
-    o = (base.float() - gamma.float().view(1, 1, -1, 1) * corr.float()).to(v.dtype)
     if not output_final_state:
         return o, None
     return o, (ht, ct, mkt, mvt)

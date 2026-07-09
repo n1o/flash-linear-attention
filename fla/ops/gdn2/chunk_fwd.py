@@ -39,13 +39,15 @@ def chunk_gdn2_fwd(
     disable_recompute: bool = False,
     return_intermediate_states: bool = False,
     state_v_first: bool = False,
+    g_is_cumsum: bool = False,
 ):
     """Top-level GDN-2 forward pipeline.
 
     The pipeline is:
       1. Compute the base-2 log-decay cumsum within each chunk
          (``kda_gate_chunk_cumsum`` if ``use_gate_in_kernel`` else
-         ``chunk_local_cumsum``).
+         ``chunk_local_cumsum``), unless ``g_is_cumsum`` is set by an
+         internal caller that already did this work.
       2. Build the intra-chunk score matrices (Aqk, Akk_inv) and the WY
          auxiliaries (w_wy, u_wy, qg, kg) via ``chunk_gdn2_fwd_intra``.
       3. Run the inter-chunk state recurrence (shared with KDA / GDN v1).
@@ -54,7 +56,10 @@ def chunk_gdn2_fwd(
     Returns ``(o, final_state, g_cumsum, Aqk, Akk, w_wy, u_wy, qg, kg, v_new,
     h, initial_state)``.
     """
-    if use_gate_in_kernel:
+    if g_is_cumsum:
+        if use_gate_in_kernel:
+            raise ValueError("g_is_cumsum cannot be combined with use_gate_in_kernel.")
+    elif use_gate_in_kernel:
         g = kda_gate_chunk_cumsum(
             g=g,
             A_log=A_log,

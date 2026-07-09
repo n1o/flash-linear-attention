@@ -339,6 +339,7 @@ def chunk_gdn2_bwd(
     v_new: torch.Tensor | None = None,
     h: torch.Tensor | None = None,
     disable_recompute: bool = False,
+    return_dg_cumsum: bool = False,
 ):
     """End-to-end GDN-2 backward.
 
@@ -448,13 +449,17 @@ def chunk_gdn2_bwd(
     )
 
     dA_log, dt_bias_grad = None, None
-    dg = chunk_local_cumsum(
-        dg,
-        chunk_size=chunk_size,
-        reverse=True,
-        cu_seqlens=cu_seqlens,
-        chunk_indices=chunk_indices,
-    )
+    if return_dg_cumsum:
+        if use_gate_in_kernel:
+            raise ValueError("return_dg_cumsum cannot be combined with use_gate_in_kernel.")
+    else:
+        dg = chunk_local_cumsum(
+            dg,
+            chunk_size=chunk_size,
+            reverse=True,
+            cu_seqlens=cu_seqlens,
+            chunk_indices=chunk_indices,
+        )
     if use_gate_in_kernel:
         dg, dA_log, dt_bias_grad = kda_gate_bwd(
             g=g_org,
